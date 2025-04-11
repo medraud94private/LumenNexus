@@ -353,3 +353,132 @@
 - `id`, `qna_id (FK)`, `card_id (FK)`
 
 ---
+아예 하나의 큰 코드 블록으로 감싸서, 내부에 추가 코드 블록을 만들지 않고 모두 들여쓰기로 처리했어요.
+이제 그대로 복사해서 .md 파일에 붙여 넣으면 절대 튀어나오지 않을 겁니다.
+
+# FastAPI + PostgreSQL REST API 서버 구축 및 배포 가이드
+
+본 가이드는 로컬 개발부터 GitHub 관리, 최종적으로 Google Cloud Platform(GCP)을 통해 실제 서비스까지 배포하는 과정을 체계적으로 정리한 것입니다.
+
+---
+
+## 1. 개발 환경 구성
+
+### 필수 설치 항목
+- Python 3.11 이상 ([다운로드 링크](https://www.python.org/downloads/))
+- PostgreSQL ([다운로드 링크](https://www.postgresql.org/download/))
+- Git ([다운로드 링크](https://git-scm.com/downloads))
+- VSCode ([다운로드 링크](https://code.visualstudio.com/))
+
+### FastAPI 및 필수 패키지 설치
+```bash
+    pip install fastapi uvicorn[standard] sqlalchemy asyncpg python-jose passlib[bcrypt] python-multipart
+```
+---
+
+## 2. 프로젝트 구조
+```
+    lumengg-api/
+    ├── app
+    │   ├── api
+    │   │   ├── auth.py
+    │   │   ├── cards.py
+    │   │   └── decks.py
+    │   ├── models
+    │   │   ├── user.py
+    │   │   ├── card.py
+    │   │   └── deck.py
+    │   ├── schemas
+    │   │   ├── user_schema.py
+    │   │   └── card_schema.py
+    │   ├── core
+    │   │   ├── database.py
+    │   │   └── security.py
+    │   └── main.py
+    ├── Dockerfile
+    ├── requirements.txt
+    └── .env
+```
+---
+
+## 3. 로컬 개발 및 테스트
+
+### .env 파일 설정
+```env
+    DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/dbname
+    JWT_SECRET=your_jwt_secret
+```
+### 서버 로컬 실행
+``` bash
+    uvicorn app.main:app --reload
+```
+### PostgreSQL 로컬 DB 생성
+``` sql
+    CREATE DATABASE lumengg;
+```
+---
+
+## 4. GitHub 관리
+
+### GitHub 저장소 생성 및 초기화
+``` bash
+    git init
+    git add .
+    git commit -m "Initial commit"
+    git remote add origin https://github.com/yourusername/lumengg-api.git
+    git push -u origin main
+```
+---
+
+## 5. Google Cloud Platform(GCP) 배포
+
+### Dockerfile 작성
+``` dockerfile
+    FROM python:3.11-slim
+
+    WORKDIR /app
+    COPY . .
+
+    RUN pip install --upgrade pip
+    RUN pip install -r requirements.txt
+
+    EXPOSE 8000
+
+    CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+### GCP Cloud Run 배포
+``` bash
+    gcloud builds submit --tag gcr.io/<project-id>/lumengg-api
+
+    gcloud run deploy lumengg-api \
+      --image gcr.io/<project-id>/lumengg-api \
+      --platform managed \
+      --region asia-northeast3 \
+      --allow-unauthenticated
+```
+---
+
+## 6. 서비스 테스트 방법
+
+- Postman 사용하여 REST API 테스트
+- 인증 토큰 테스트 시 Header에 다음과 같이 추가:
+```http
+    Authorization: Bearer {JWT_TOKEN}
+```
+---
+
+## 7. 모니터링 및 관리
+
+- Google Cloud Logging 및 Monitoring 사용
+- DB 자동 백업 설정 (Cloud SQL)
+- Redis 추가를 통한 캐싱 설정 (선택 사항)
+
+---
+
+## 8. 추가적인 보안 관리
+
+- JWT_SECRET 키 보호
+- HTTPS 필수 사용 (GCP Cloud Run 자동 지원)
+- 정기적 패키지 업데이트로 보안 유지
+
+---
