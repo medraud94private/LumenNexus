@@ -152,3 +152,204 @@
 - **운영 전략:**
   - **초기 단계:** 최소 인스턴스 구성으로 비용 최적화 후 부하 테스트를 통해 실제 트래픽에 맞춘 Auto Scaling, 캐싱 전략 적용
   - **대회 당일 피크:** 사전 워밍업된 인스턴스 또는 서버리스/컨테이너 기반 서비스를 이용하여 급격한 부하에 대비
+
+
+-----
+# API 명세 초안
+
+# LumenGG REST API 및 데이터베이스 설계안
+
+## REST API 명세
+
+### 인증 (Auth)
+
+- **POST** `/api/auth/signup`  
+  **요청**:  
+  ```json
+  {
+    "username": "string",
+    "email": "string",
+    "password": "string"
+  }
+  ```  
+  **응답**:  
+  ```json
+  {
+    "token": "string"
+  }
+  ```
+
+- **POST** `/api/auth/login`  
+  **요청**:  
+  ```json
+  {
+    "username": "string", // 또는 email
+    "password": "string"
+  }
+  ```  
+  **응답**:  
+  ```json
+  {
+    "token": "string"
+  }
+  ```
+
+- **POST** `/api/auth/logout`  
+  **요청**:  
+  ```json
+  {
+    "token": "string"
+  }
+  ```  
+  **응답**:  
+  ```json
+  {
+    "message": "string"
+  }
+  ```
+
+---
+
+### 카드 (Card)
+
+- **GET** `/api/cards/`  
+  **요청 파라미터**: `query?, character?, tags?`  
+  **응답**: 카드 목록 JSON
+
+- **GET** `/api/cards/{id}/`  
+  **응답**: 카드 상세 정보 JSON
+
+- **POST** `/api/cards/` *(관리자용)*  
+  **요청**: 카드 생성 정보 JSON  
+  **응답**: 생성된 카드 JSON
+
+---
+
+### 덱 (Deck)
+
+- **GET** `/api/decks/`  
+  **요청 파라미터**: `query?, character?, author?`  
+  **응답**: 덱 목록 JSON
+
+- **POST** `/api/decks/`  
+  **요청**:  
+  ```json
+  {
+    "name": "string",
+    "character_id": 1,
+    "cards": [
+      {
+        "card_id": 1,
+        "count": 2,
+        "side": false,
+        "hand": false
+      }
+    ],
+    "private": false,
+    "description": "string",
+    "tags": ["tag1", "tag2"]
+  }
+  ```  
+  **응답**: 생성된 덱 JSON
+
+- **GET** `/api/decks/{id}/`  
+  **응답**: 덱 상세 정보 JSON
+
+- **PUT** `/api/decks/{id}/`  
+  **요청**: 덱 수정 정보 JSON  
+  **응답**: 수정된 덱 JSON
+
+- **DELETE** `/api/decks/{id}/`  
+  **응답**:  
+  ```json
+  {
+    "message": "Deleted successfully"
+  }
+  ```
+
+---
+
+### 콜렉션 (Collection)
+
+- **GET** `/api/collection/`  
+  **응답**: 사용자 콜렉션 JSON
+
+- **POST** `/api/collection/`  
+  **요청**:  
+  ```json
+  {
+    "collected_cards": [
+      {
+        "collection_card_id": 1,
+        "amount": 2
+      }
+    ]
+  }
+  ```  
+  **응답**: 업데이트된 콜렉션 JSON
+
+---
+
+### Q&A
+
+- **GET** `/api/qna/`  
+  **요청 파라미터**: `query?, faq?`  
+  **응답**: 질문 목록 JSON
+
+- **POST** `/api/qna/` *(관리자용)*  
+  **요청**:  
+  ```json
+  {
+    "title": "string",
+    "question": "string",
+    "answer": "string",
+    "faq": true,
+    "cards": [1, 2]
+  }
+  ```  
+  **응답**: 생성된 Q&A JSON
+
+- **GET** `/api/qna/{id}/`  
+  **응답**: 질문 상세 정보 JSON
+
+---
+
+## 데이터베이스 구조
+
+### User
+- `id`, `username`, `email`, `password`, `date_joined`, `last_login`
+
+### Character
+- `id`, `name`, `description`, `faction`, `health`, `hand_limit`
+
+### Card
+- `id`, `character_id (FK)`, `name`, `speed`, `damage`, `hit_area`, `effects`, `image_url`, `keywords`
+
+### Tag
+- `id`, `name`, `description`
+
+### CardTag (중개 테이블)
+- `id`, `card_id (FK)`, `tag_id (FK)`
+
+### Deck
+- `id`, `author_id (FK)`, `name`, `character_id (FK)`, `description`, `private`, `created_at`
+
+### CardInDeck
+- `id`, `deck_id (FK)`, `card_id (FK)`, `count`, `side`, `hand`
+
+### Pack
+- `id`, `name`, `code`, `release_date`
+
+### CollectionCard
+- `id`, `card_id (FK)`, `pack_id (FK)`, `rarity`, `code`, `name`, `image_url`
+
+### Collected
+- `id`, `user_id (FK)`, `collection_card_id (FK)`, `amount`
+
+### QNA
+- `id`, `title`, `question`, `answer`, `faq`, `created_at`
+
+### QNACard (중개 테이블)
+- `id`, `qna_id (FK)`, `card_id (FK)`
+
+---
