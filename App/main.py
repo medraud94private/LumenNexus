@@ -7,9 +7,7 @@ from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-# Alembic
-from alembic.config import Config
-from alembic import command
+
 
 # ──────────────
 # 1) DB 설정
@@ -24,18 +22,6 @@ SYNC_URL= DATABASE_URL.replace("postgresql+asyncpg", "postgresql")
 engine = create_async_engine(DATABASE_URL, echo=True)
 async_session = sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 
-# Alembic.ini 경로(본 예시에선 main.py와 같은 디렉토리에 있다고 가정)
-ALEMBIC_INI_PATH = os.path.join(os.path.dirname(__file__), "..", "alembic.ini")
-
-def run_alembic_migrations_sync():
-    """
-    동기 방식으로 Alembic 마이그레이션 수행하는 함수.
-    (asynccontextmanager 내부가 아닌, 별도 동기 함수)
-    """
-    print(">>> [ALEMBIC] Using SYNC_URL =", SYNC_URL)
-    alembic_cfg = Config(ALEMBIC_INI_PATH)
-    alembic_cfg.set_main_option("sqlalchemy.url", SYNC_URL)
-    command.upgrade(alembic_cfg, "head")
 
 # ──────────────
 # 2) Lifespan 컨텍스트 매니저
@@ -46,17 +32,7 @@ async def lifespan(app: FastAPI):
     FastAPI 0.95+ 권장사항: lifespan 파라미터를 사용.
     앱 '시작 전'에 Alembic 마이그레이션 → '종료 후'에 리소스 정리.
     """
-    # ------------------------------
-    # 앱 시작 전: DB 마이그레이션
-    # ------------------------------
-    try:
-        print(">>> [LIFESPAN] Running Alembic migrations in threadpool...")
-        await run_in_threadpool(run_alembic_migrations_sync)
-        print(">>> [LIFESPAN] Migrations complete. DB is up to date.")
-    except Exception as e:
-        print(">>> [LIFESPAN] Migration ERROR:", e)
-        # 마이그레이션 실패 시 앱 시작을 중지시킬지 여부는 상황에 따라 결정
-        raise
+
 
     # 필요시 DB 연결 테스트 등 추가 가능
     # 예: async with async_session() as session: ...
@@ -79,6 +55,32 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# ──────────────
+# OpenAPI 스키마 오버라이드: local_kw 파라미터 제거
+# ──────────────
+from fastapi.openapi.utils import get_openapi
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version="0.1.0",
+        description="LumenNexus API",
+        routes=app.routes,
+    )
+    # 각 경로의 각 연산에서 'local_kw'라는 파라미터를 제거합니다.
+    for path in openapi_schema.get("paths", {}).values():
+        for operation in path.values():
+            if "parameters" in operation:
+                operation["parameters"] = [
+                    param for param in operation["parameters"]
+                    if param.get("name") != "local_kw"
+                ]
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 # ──────────────
 # 4) 라우터 등록 
 # ──────────────

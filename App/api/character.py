@@ -2,21 +2,21 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from app.core.database import async_session
+from app.core.database import get_db
 from app.models.character import Character
 from app.schemas.character_schema import CharacterCreate, CharacterUpdate, CharacterOut
 
 router = APIRouter(prefix="/characters", tags=["Character"])
 
 @router.get("/", response_model=list[CharacterOut])
-async def get_characters(db: AsyncSession = Depends(async_session)):
+async def get_characters(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Character))
     return result.scalars().all()
 
 @router.post("/", response_model=CharacterOut)
 async def create_character(
     character_in: CharacterCreate,
-    db: AsyncSession = Depends(async_session)
+    db: AsyncSession = Depends(get_db)
 ):
     new_char = Character(**character_in.dict())
     db.add(new_char)
@@ -25,7 +25,7 @@ async def create_character(
     return new_char
 
 @router.get("/{char_id}", response_model=CharacterOut)
-async def get_character(char_id: int, db: AsyncSession = Depends(async_session)):
+async def get_character(char_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Character).where(Character.id == char_id))
     character = result.scalar_one_or_none()
     if not character:
@@ -36,7 +36,7 @@ async def get_character(char_id: int, db: AsyncSession = Depends(async_session))
 async def update_character(
     char_id: int,
     character_in: CharacterUpdate,
-    db: AsyncSession = Depends(async_session)
+    db: AsyncSession = Depends(get_db)
 ):
     result = await db.execute(select(Character).where(Character.id == char_id))
     character = result.scalar_one_or_none()
@@ -51,7 +51,7 @@ async def update_character(
     return character
 
 @router.delete("/{char_id}")
-async def delete_character(char_id: int, db: AsyncSession = Depends(async_session)):
+async def delete_character(char_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Character).where(Character.id == char_id))
     character = result.scalar_one_or_none()
     if not character:

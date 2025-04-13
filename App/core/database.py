@@ -1,6 +1,7 @@
 # app/core/database.py
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from typing import AsyncGenerator
 
 DATABASE_URL = "postgresql+asyncpg://user:password@db:5432/lumennexus"
 
@@ -14,3 +15,8 @@ async_session = sessionmaker(
 
 class Base(DeclarativeBase):
     pass
+
+# 데이터베이스 세션 의존성 함수 작성
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with async_session() as session:
+        yield session
