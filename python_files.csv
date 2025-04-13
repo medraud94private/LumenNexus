@@ -1,0 +1,406 @@
+제목,본문
+env.py,"# lumennexus/alembic/env.py
+import sys
+import os
+from logging.config import fileConfig
+from sqlalchemy import engine_from_config
+from sqlalchemy import pool
+from alembic import context
+
+# ===== 여기가 중요 =====
+# app.core.database에서 engine, Base 임포트
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+from app.core.database import Base, DATABASE_URL
+
+# 이 아래는 alembic 기본 자동 설정
+config = context.config
+fileConfig(config.config_file_name)
+
+target_metadata = Base.metadata
+
+def run_migrations_offline():
+    # DB 연결 없이 SQL 파일 생성용
+    url = DATABASE_URL
+    context.configure(
+        url=url, 
+        target_metadata=target_metadata, 
+        literal_binds=True,
+        dialect_opts={""paramstyle"": ""named""},
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+def run_migrations_online():
+    # 실제 DB 연결 후 마이그레이션 진행
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section),
+        url=DATABASE_URL,
+        prefix=""sqlalchemy."",
+        poolclass=pool.NullPool,
+    )
+    with connectable.connect() as connection:
+        context.configure(connection=connection, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+"
+main.py,"import os
+import sys
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from starlette.concurrency import run_in_threadpool
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+
+# Alembic
+from alembic.config import Config
+from alembic import command
+
+# ──────────────
+# 1) DB 설정
+# ──────────────
+DATABASE_URL = os.getenv(
+    ""DATABASE_URL"",
+    ""postgresql+asyncpg://user:password@db:5432/lumennexus""
+)
+
+SYNC_URL= DATABASE_URL.replace(""postgresql+asyncpg"", ""postgresql"")
+
+engine = create_async_engine(DATABASE_URL, echo=True)
+async_session = sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
+
+# Alembic.ini 경로(본 예시에선 main.py와 같은 디렉토리에 있다고 가정)
+ALEMBIC_INI_PATH = os.path.join(os.path.dirname(__file__), "".."", ""alembic.ini"")
+
+def run_alembic_migrations_sync():
+    """"""
+    동기 방식으로 Alembic 마이그레이션 수행하는 함수.
+    (asynccontextmanager 내부가 아닌, 별도 동기 함수)
+    """"""
+    print("">>> [ALEMBIC] Using SYNC_URL ="", SYNC_URL)
+    alembic_cfg = Config(ALEMBIC_INI_PATH)
+    alembic_cfg.set_main_option(""sqlalchemy.url"", SYNC_URL)
+    command.upgrade(alembic_cfg, ""head"")
+
+# ──────────────
+# 2) Lifespan 컨텍스트 매니저
+# ──────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """"""
+    FastAPI 0.95+ 권장사항: lifespan 파라미터를 사용.
+    앱 '시작 전'에 Alembic 마이그레이션 → '종료 후'에 리소스 정리.
+    """"""
+    # ------------------------------
+    # 앱 시작 전: DB 마이그레이션
+    # ------------------------------
+    try:
+        print("">>> [LIFESPAN] Running Alembic migrations in threadpool..."")
+        await run_in_threadpool(run_alembic_migrations_sync)
+        print("">>> [LIFESPAN] Migrations complete. DB is up to date."")
+    except Exception as e:
+        print("">>> [LIFESPAN] Migration ERROR:"", e)
+        # 마이그레이션 실패 시 앱 시작을 중지시킬지 여부는 상황에 따라 결정
+        raise
+
+    # 필요시 DB 연결 테스트 등 추가 가능
+    # 예: async with async_session() as session: ...
+
+    # yield 한 뒤로 실제 요청 처리 시작
+    yield
+
+    # ------------------------------
+    # 앱 종료 시: 리소스 정리
+    # ------------------------------
+    print("">>> [LIFESPAN] App shutting down. Disposing engine..."")
+    await engine.dispose()
+    print("">>> [LIFESPAN] Cleanup complete."")
+
+# ──────────────
+# 3) FastAPI 앱 생성 + Lifespan 지정
+# ──────────────
+app = FastAPI(
+    title=""LumenNexus API"",
+    lifespan=lifespan
+)
+
+# ──────────────
+# 4) 라우터 등록 
+# ──────────────
+from app.api.card import router as card_router
+app.include_router(card_router)
+
+@app.get(""/"")
+async def read_root():
+    return {""message"": ""Hello, LumenNexus with Alembic + lifespan!""}
+
+@app.get(""/healthcheck"")
+async def healthcheck():
+    """"""
+    DB 연결 정상 여부를 확인하는 간단한 헬스체크 엔드포인트.
+    """"""
+    try:
+        async with async_session() as session:
+            result = await session.execute(""SELECT 1"")
+            num = result.scalar()
+            if num == 1:
+                return {""db"": ""ok""}
+    except Exception as e:
+        return {""db"": ""error"", ""error"": str(e)}
+"
+card.py,"# app/api/card.py
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from app.core.database import async_session
+from app.models.card import Card
+from app.schemas.card_schema import CardCreate, CardUpdate, CardOut
+
+
+router = APIRouter(prefix=""/cards"", tags=[""Card""])
+
+@router.get(""/"", response_model=list[CardOut])
+async def get_cards(db: AsyncSession = Depends(async_session)):
+    result = await db.execute(select(Card))
+    return result.scalars().all()
+
+@router.post(""/"", response_model=CardOut)
+async def create_card(
+    card_in: CardCreate,
+    db: AsyncSession = Depends(async_session)
+):
+    new_card = Card(**card_in.dict())
+    db.add(new_card)
+    await db.commit()
+    await db.refresh(new_card)
+    return new_card
+
+@router.get(""/{card_id}"", response_model=CardOut)
+async def get_card(card_id: int, db: AsyncSession = Depends(async_session)):
+    result = await db.execute(select(Card).where(Card.id == card_id))
+    card = result.scalar_one_or_none()
+    if not card:
+        raise HTTPException(status_code=404, detail=""Card not found"")
+    return card
+
+@router.put(""/{card_id}"", response_model=CardOut)
+async def update_card(
+    card_id: int,
+    card_in: CardUpdate,
+    db: AsyncSession = Depends(async_session)
+):
+    result = await db.execute(select(Card).where(Card.id == card_id))
+    card = result.scalar_one_or_none()
+    if not card:
+        raise HTTPException(status_code=404, detail=""Card not found"")
+
+    for field, value in card_in.dict(exclude_unset=True).items():
+        setattr(card, field, value)
+
+    await db.commit()
+    await db.refresh(card)
+    return card
+
+@router.delete(""/{card_id}"")
+async def delete_card(card_id: int, db: AsyncSession = Depends(async_session)):
+    result = await db.execute(select(Card).where(Card.id == card_id))
+    card = result.scalar_one_or_none()
+    if not card:
+        raise HTTPException(status_code=404, detail=""Card not found"")
+    await db.delete(card)
+    await db.commit()
+    return {""detail"": ""Card deleted""}
+"
+character.py,"# app/api/character.py
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from app.core.database import async_session
+from app.models.character import Character
+from app.schemas.character_schema import CharacterCreate, CharacterUpdate, CharacterOut
+
+router = APIRouter(prefix=""/characters"", tags=[""Character""])
+
+@router.get(""/"", response_model=list[CharacterOut])
+async def get_characters(db: AsyncSession = Depends(async_session)):
+    result = await db.execute(select(Character))
+    return result.scalars().all()
+
+@router.post(""/"", response_model=CharacterOut)
+async def create_character(
+    character_in: CharacterCreate,
+    db: AsyncSession = Depends(async_session)
+):
+    new_char = Character(**character_in.dict())
+    db.add(new_char)
+    await db.commit()
+    await db.refresh(new_char)
+    return new_char
+
+@router.get(""/{char_id}"", response_model=CharacterOut)
+async def get_character(char_id: int, db: AsyncSession = Depends(async_session)):
+    result = await db.execute(select(Character).where(Character.id == char_id))
+    character = result.scalar_one_or_none()
+    if not character:
+        raise HTTPException(status_code=404, detail=""Character not found"")
+    return character
+
+@router.put(""/{char_id}"", response_model=CharacterOut)
+async def update_character(
+    char_id: int,
+    character_in: CharacterUpdate,
+    db: AsyncSession = Depends(async_session)
+):
+    result = await db.execute(select(Character).where(Character.id == char_id))
+    character = result.scalar_one_or_none()
+    if not character:
+        raise HTTPException(status_code=404, detail=""Character not found"")
+
+    for field, value in character_in.dict(exclude_unset=True).items():
+        setattr(character, field, value)
+
+    await db.commit()
+    await db.refresh(character)
+    return character
+
+@router.delete(""/{char_id}"")
+async def delete_character(char_id: int, db: AsyncSession = Depends(async_session)):
+    result = await db.execute(select(Character).where(Character.id == char_id))
+    character = result.scalar_one_or_none()
+    if not character:
+        raise HTTPException(status_code=404, detail=""Character not found"")
+
+    await db.delete(character)
+    await db.commit()
+    return {""detail"": ""Character deleted""}
+"
+database.py,"# app/core/database.py
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
+
+DATABASE_URL = ""postgresql+asyncpg://user:password@db:5432/lumennexus""
+
+engine = create_async_engine(DATABASE_URL, echo=True)
+
+async_session = sessionmaker(
+    bind=engine,
+    expire_on_commit=False,
+    class_=AsyncSession
+)
+
+class Base(DeclarativeBase):
+    pass
+"
+card.py,"# app/models/card.py
+from sqlalchemy import Column, Integer, String, Text, ForeignKey
+from sqlalchemy.orm import relationship
+from app.core.database import Base
+
+class Card(Base):
+    __tablename__ = ""cards""
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False) 
+    ruby = Column(String(100), nullable=True)      # 루비(읽는 법)
+    frame = Column(Integer, nullable=True)         # 속도
+    damage = Column(Integer, nullable=True)        # 대미지
+    pos = Column(String(3), nullable=True)         # 판정 (상단/중단/하단 등)
+    body = Column(String(10), nullable=True)       # 부위 (손/발/등등)
+    text = Column(Text, nullable=True)             # 카드 효과
+    hit = Column(String(4), nullable=True)
+    guard = Column(String(4), nullable=True)
+    counter = Column(String(4), nullable=True)
+    special = Column(String(20), nullable=True)    # 특수판정
+    g_top = Column(String(5), nullable=True)       # 상단방어
+    g_mid = Column(String(5), nullable=True)       # 중단방어
+    g_bot = Column(String(5), nullable=True)       # 하단방어
+    type = Column(String(10), nullable=False, default='공격')  # 공격/수비/특수/...
+    code = Column(String(20), nullable=True)       # 카드 코드
+
+    # 캐릭터와의 관계
+    character_id = Column(Integer, ForeignKey(""characters.id""), nullable=True)
+    character = relationship(""Character"", back_populates=""cards"")
+
+    # 이미지 필드
+    image_url = Column(String, nullable=True)
+    image_mid_url = Column(String, nullable=True)
+    image_sm_url = Column(String, nullable=True)
+
+    # 검색 관련
+    hidden_keyword = Column(String(255), nullable=True, default='')
+    keyword = Column(String(255), nullable=True, default='')
+    search = Column(String(255), nullable=True, default='')
+"
+character.py,
+__init__.py,
+card_schema.py,"# app/schemas/card_schema.py
+from pydantic import BaseModel
+from typing import Optional
+
+class CardBase(BaseModel):
+    name: str
+    ruby: Optional[str] = None
+    frame: Optional[int] = None
+    damage: Optional[int] = None
+    pos: Optional[str] = None
+    body: Optional[str] = None
+    text: Optional[str] = None
+    hit: Optional[str] = None
+    guard: Optional[str] = None
+    counter: Optional[str] = None
+    special: Optional[str] = None
+    g_top: Optional[str] = None
+    g_mid: Optional[str] = None
+    g_bot: Optional[str] = None
+    type: Optional[str] = '공격'
+    code: Optional[str] = None
+    image_url: Optional[str] = None
+    image_mid_url: Optional[str] = None
+    image_sm_url: Optional[str] = None
+    hidden_keyword: Optional[str] = None
+    keyword: Optional[str] = None
+    search: Optional[str] = None
+
+class CardCreate(CardBase):
+    character_id: Optional[int] = None
+
+class CardUpdate(CardBase):
+    character_id: Optional[int] = None
+
+class CardOut(CardBase):
+    id: int
+    character_id: Optional[int]
+
+    class Config:
+        orm_mode = True
+"
+character_schema.py,"
+# app/schemas/character_schema.py
+from pydantic import BaseModel
+from typing import Optional, Dict
+
+class CharacterBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    group: Optional[str] = None
+    hp_hand: Optional[Dict[str, int]] = None  # { '5': 6, '3': 7 ... } 등
+    image_url: Optional[str] = None
+
+class CharacterCreate(CharacterBase):
+    pass
+
+class CharacterUpdate(CharacterBase):
+    pass
+
+class CharacterOut(CharacterBase):
+    id: int
+
+    class Config:
+        orm_mode = True
+"
+__init__.py,
